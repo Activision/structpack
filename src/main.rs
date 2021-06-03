@@ -184,48 +184,45 @@ where
     }
 }
 
-fn add_padding_blocks(mut s: CppStruct) -> Option<CppStruct> {
-    'out: loop {
-        let mut expected_offset = 0;
-        let mut last_offset = 0;
-        for (i, m) in s.members.iter().enumerate() {
-            let type_size = m.total_size();
-            if type_size == 0 {
-                return None;
-            }
-
-            if expected_offset == m.byte_offset {
-                expected_offset += type_size;
-            } else if m.byte_offset > expected_offset {
-                s.members.insert(
-                    i,
-                    CppMember {
-                        name: String::new(),
-                        type_name: "<padding>".to_string(),
-                        type_size: m.byte_offset - expected_offset,
-                        byte_offset: expected_offset,
-                        array_count: Vec::new(),
-                    },
-                );
-                continue 'out;
-            } else if m.byte_offset == last_offset {
-                // This is a union...
-                expected_offset = std::cmp::max(expected_offset, m.byte_offset + type_size);
-            }
-            last_offset = m.byte_offset;
+fn add_padding_blocks(s: &mut CppStruct) -> bool {
+    let mut expected_offset = 0;
+    let mut last_offset = 0;
+    let mut new_members = Vec::with_capacity(s.members.len() * 2);
+    for m in &s.members {
+        let type_size = m.total_size();
+        if type_size == 0 {
+            return false;
         }
-        if expected_offset < s.size {
-            s.members.push(CppMember {
+
+        if expected_offset == m.byte_offset {
+            expected_offset += type_size;
+        } else if m.byte_offset > expected_offset {
+            new_members.push(CppMember {
                 name: String::new(),
                 type_name: "<padding>".to_string(),
-                type_size: s.size - expected_offset,
+                type_size: m.byte_offset - expected_offset,
                 byte_offset: expected_offset,
                 array_count: Vec::new(),
             });
+            expected_offset = m.byte_offset + type_size;
+        } else if m.byte_offset == last_offset {
+            // This is a union...
+            expected_offset = std::cmp::max(expected_offset, m.byte_offset + type_size);
         }
-        break;
+        new_members.push(m.clone());
+        last_offset = m.byte_offset;
     }
-    Some(s)
+    if expected_offset < s.size {
+        new_members.push(CppMember {
+            name: String::new(),
+            type_name: "<padding>".to_string(),
+            type_size: s.size - expected_offset,
+            byte_offset: expected_offset,
+            array_count: Vec::new(),
+        });
+    }
+    s.members = new_members;
+    true
 }
 
 fn align_up(amount: usize, align: usize) -> usize {
@@ -346,7 +343,7 @@ fn main() -> Result<(), Error> {
                             ));
                         }
                     }
-                    if let Some(cpp_struct) = add_padding_blocks(cpp_struct) {
+                    if add_padding_blocks(&mut cpp_struct) {
                         let (padding, optimal_size) = count_padding(&cpp_struct);
                         if padding != 0 && cpp_struct.size != optimal_size {
                             let optimal_padding = optimal_size - (cpp_struct.size - padding);
